@@ -1,0 +1,94 @@
+#include <Adafruit_BME680.h>
+#include <BH1750.h>
+
+char address = '0';
+String command = "";
+String dataBuffer = "+24.50+48.20+315.00";
+
+void setup() {
+  Serial.begin(9600);
+
+  Serial.println("--- SDI-12 Environmental Sensor Node Booting ---");
+  Serial.println("Type '?!', '0M!', '0D0!', '0R0!' or '0A1!' to test.");
+}
+
+void loop() {
+ 
+}
+
+void handleCommand(String cmd) {
+  cmd.trim();
+
+  // Address Query: ?!
+  if (cmd == "?!") {
+    Serial.print(address);
+    Serial.print("\r\n");
+  }
+
+
+  // Change Address
+  //aAb!--> b<CR><LF>
+  //0A1! changes from 0 to 1
+  //A- the changed address command
+  //b- the address change to
+  //!terminates the command
+
+else if (cmd.length() == 4 &&
+           cmd[0] == address &&
+           cmd[1] == 'A' &&
+           cmd[3] == '!') {
+
+    address = cmd[2];
+
+    Serial.print(address);
+    Serial.print("\r\n");}
+
+  
+  // Start Measurement
+  // aM! ---> atttn<CR><LF>
+  //a- the sensor address
+  //M- the start measurement
+  //! terminates the code
+  else if (cmd == String(address) + "M!") {
+    readSensors();
+
+    Serial.print(address);
+    Serial.print("0033");
+    Serial.print("\r\n");
+  }
+
+  
+  // Send Data
+  // aD0! to aD9!
+  //D0-D1 dend data command 
+
+  
+  else if (cmd.length() == 4 &&
+           cmd[0] == address &&
+           cmd[1] == 'D' &&
+           cmd[2] >= '0' &&
+           cmd[2] <= '9' &&
+           cmd[3] == '!') {
+   Serial.print(address);
+   Serial.print(dataBuffer);
+   Serial.print("\r\n");
+
+    
+  }
+
+  
+  // Continuous Measurement
+  // aR0! to aR9!
+  
+  else if (cmd.length() == 4 &&
+           cmd[0] == address &&
+           cmd[1] == 'R' &&
+           cmd[2] >= '0' &&
+           cmd[2] <= '9' &&
+           cmd[3] == '!') {
+
+    readSensors();
+
+    sendResponse(String(address) + databuffer);
+  }
+}
