@@ -1,14 +1,243 @@
-// Libraries
+/*
+ * Unit: ENG20009 Engineering Technology Inquiry Project
+ * Group 2 Members:
+ * - Jaymond Martin (102579706)   [Task: Standalone Logic, RTC & Timestamps]
+ * - Taha Mohamed Shaik (105910382)
+ * - Chinmayee Sharma (105702631)
+ * 
+ * Description: Project Credit Task - The "Edge Data Hub"
+ * Transforms the compliant sensor node into a standalone logger. 
+ * Automatically logs data to an SD card every 60 seconds with an RTC timestamp.
+ * Features an LCD dashboard and pushbutton configuration menu.
+ * 
+ * Hardware Mapping (Swinburne Arduino Due Board):
+ * - BME680 & BH1750 & DS1307 RTC -> I2C (SDA/SCL)
+ * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO -> Pin 7
+ * - TFT LCD -> Software SPI (Pins 10, 7, 11, 13)
+ * - SD Card -> Software SPI (Pins A3, 12, 11, 13)
+ * - Pushbuttons -> Pins 2, 3, 4, 5
+ */
 
-// Pin Definitions
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME680.h>
+#include <BH1750.h>
+#include "RTClib.h"
 
-// Main Functions
-void setup()
-{
+// --- SENSOR & RTC OBJECTS ---
+Adafruit_BME680 bme;
+BH1750 lightMeter;
+RTC_DS1307 rtc;
+
+// --- SDI-12 STATE VARIABLES ---
+#define DIRO_PIN 7 
+char address = '0';
+String command = "";
+String dataBuffer = "+0.00+0.00+0.00+0.00+0.00"; 
+
+// --- STANDALONE LOGGING VARIABLES ---
+unsigned long lastLogTime = 0;
+const unsigned long logInterval = 60000; // 60 seconds in milliseconds
+
+// Function prototypes
+void handleCommand(String cmd);
+void sendSDI12Response(String message);
+void readSensors();
+void executeLogCycle();
+String getTimestamp();
+
+// Prototype functions
+void initSDCard();
+void logToSDCard(String logEntry);
+void clearSDCard();
+void initLCD();
+void updateDashboard();
+void checkPushbuttons();
+
+void setup() {
   Serial.begin(9600);
+  Serial.println("--- Edge Data Hub Booting ---");
+
+  // 1. Initialize SDI-12 UART
+  Serial1.begin(1200, SERIAL_7E1);
+  pinMode(DIRO_PIN, OUTPUT);
+  digitalWrite(DIRO_PIN, HIGH); 
+  
+  // 2. Initialize I2C Bus & Sensors
+  Wire.begin();
+
+  if (!lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+    Serial.println("Error: BH1750 initialization failed!");
+  }
+  if (!bme.begin(0x76)) {
+    Serial.println("Error: BME680 initialization failed!");
+  } else {
+    bme.setTemperatureOversampling(BME680_OS_8X);
+    bme.setHumidityOversampling(BME680_OS_2X);
+    bme.setPressureOversampling(BME680_OS_4X);
+    bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
+    bme.setGasHeater(320, 150); 
+  }
+
+  // 3. Initialize RTC (Jaymond's Task)
+  if (!rtc.begin()) {
+    Serial.println("Error: RTC not found on I2C bus!");
+  }
+  if (!rtc.isrunning()) {
+    Serial.println("RTC is NOT running, setting to compile time...");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
+  // 4. Initialize Teammate Modules
+  initSDCard();
+  initLCD();
+
+  Serial.println("System Ready. Standalone logging active.");
 }
 
-void loop()
-{
+void loop() {
+  // ==========================================================
+  // SDI-12 POLLING (Legacy Pass Task Logic)
+  // ==========================================================
+  if (Serial1.available()) {
+    int incomingByte = Serial1.read();
+    if (incomingByte == 33) {
+      handleCommand(command + "!");
+      command = ""; 
+    } else {
+      if (incomingByte != 0 && incomingByte != '\r' && incomingByte != '\n') {
+        command += char(incomingByte);
+      }
+    }
+  }
 
+  // ==========================================================
+  // AUTHOR: Jaymond Martin (102579706)
+  // TASK: Standalone Timer Logic
+  // ==========================================================
+  // Non-blocking 60-second timer for automatic logging
+  if (millis() - lastLogTime >= logInterval) {
+    lastLogTime = millis();
+    executeLogCycle();
+  }
+
+  // ==========================================================
+  // AUTHOR: 
+  // TASK: Config Menu Polling
+  // ==========================================================
+  checkPushbuttons();
+}
+
+// ==========================================================
+// AUTHOR: Jaymond Martin (102579706)
+// TASK: Core Logging & Timestamp Generation
+// ==========================================================
+void executeLogCycle() {
+  // 1. Update the sensor data buffer
+  readSensors();
+
+  // 2. Generate the timestamp
+  String timestamp = getTimestamp();
+
+  // 3. Construct the CSV row (e.g., "2026-05-25 18:15:00, +25.34+1011.24...")
+  String logEntry = timestamp + ", " + dataBuffer;
+
+  // Print to Serial for debugging
+  Serial.print("Auto-Log Triggered: ");
+  Serial.println(logEntry);
+
+  // 4. Pass the data to SD Card function and LCD function
+  logToSDCard(logEntry);
+  updateDashboard();
+}
+
+String getTimestamp() {
+  DateTime now = rtc.now();
+  char timeBuffer[25];
+  
+  // Format: YYYY-MM-DD HH:MM:SS
+  sprintf(timeBuffer, "%04d-%02d-%02d %02d:%02d:%02d", 
+          now.year(), now.month(), now.day(), 
+          now.hour(), now.minute(), now.second());
+          
+  return String(timeBuffer);
+}
+
+// ==========================================================
+// LEGACY PASS TASK FUNCTIONS (Sensors & SDI-12)
+// ==========================================================
+void readSensors() {
+  if (!bme.performReading()) return;
+  float lux = lightMeter.readLightLevel();
+  
+  dataBuffer = ""; 
+  dataBuffer += "+"; dataBuffer += String(bme.temperature, 2);
+  dataBuffer += "+"; dataBuffer += String(bme.pressure / 100.0, 2);
+  dataBuffer += "+"; dataBuffer += String(bme.humidity, 2);
+  dataBuffer += "+"; dataBuffer += String(bme.gas_resistance / 1000.0, 2);
+  dataBuffer += "+"; dataBuffer += String(lux, 2);
+}
+
+void handleCommand(String cmd) {
+  cmd.trim();
+  if (cmd == "?!") {
+    sendSDI12Response(String(address));
+  } else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'A' && cmd[3] == '!') {
+    address = cmd[2]; 
+    sendSDI12Response(String(address));
+  } else if (cmd == String(address) + "M!") {
+    readSensors();
+    sendSDI12Response(String(address) + "0035");
+  } else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'D' && cmd[3] == '!') {
+    if (cmd[2] == '0') sendSDI12Response(String(address) + dataBuffer);
+    else if (cmd[2] > '0' && cmd[2] <= '9') sendSDI12Response(String(address)); 
+  } else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'R' && cmd[3] == '!') {
+    if (cmd[2] == '0') {
+      readSensors();
+      sendSDI12Response(String(address) + dataBuffer);
+    } else if (cmd[2] > '0' && cmd[2] <= '9') sendSDI12Response(String(address)); 
+  }
+}
+
+void sendSDI12Response(String message) {
+  digitalWrite(DIRO_PIN, LOW); 
+  delay(100); 
+  Serial1.print(message + "\r\n");
+  Serial1.flush(); 
+  Serial1.end();
+  Serial1.begin(1200, SERIAL_7E1);
+  digitalWrite(DIRO_PIN, HIGH); 
+}
+
+// ==========================================================
+// TEAMMATE PLACEHOLDER FUNCTIONS
+// ==========================================================
+
+// --- SD CARD ---
+void initSDCard() {
+  // TODO: Initialize the SdFat library using Software SPI (Pins A3, 12, 11, 13)
+}
+
+void logToSDCard(String logEntry) {
+  // TODO: Open the CSV file, append the logEntry string, and close it
+}
+
+void clearSDCard() {
+  // TODO: Delete or overwrite the CSV file to clear memory
+}
+
+// --- LCD & BUTTONS ---
+void initLCD() {
+  // TODO: Initialize the Adafruit_ST7735 library using Software SPI
+  // Draw the static text for the dashboard (e.g., "Temp:", "Humidity:")
+}
+
+void updateDashboard() {
+  // TODO: Print the current sensor values to the LCD
+}
+
+void checkPushbuttons() {
+  // TODO: Poll the pushbuttons (Pins 2, 3, 4, 5) with debounce logic
+  // If Button 1 is pressed: Call executeLogCycle() to manually trigger a log
+  // If Button 2 is pressed: Call clearSDCard()
 }
