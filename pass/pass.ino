@@ -93,7 +93,6 @@ void loop() {
       // Pass the complete command string to the parser
       handleCommand(command + "!");
       
-      // Wipe the buffer clean immediately so it's ready for the next command
       command = ""; 
     } else {
       // Ignore start bits (0) and append valid characters to the buffer
