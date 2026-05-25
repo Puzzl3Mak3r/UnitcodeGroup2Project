@@ -139,26 +139,34 @@ void handleCommand(String cmd) {
   else if (cmd.length() == 4 &&
            cmd[0] == address &&
            cmd[1] == 'D' &&
-           cmd[2] >= '0' &&
-           cmd[2] <= '9' &&
            cmd[3] == '!') {
            
-    String response = String(address) + dataBuffer;
-    sendSDI12Response(response);
+    if (cmd[2] == '0') {
+      // D0 requests the primary data payload
+      String response = String(address) + dataBuffer;
+      sendSDI12Response(response);
+    } else if (cmd[2] > '0' && cmd[2] <= '9') {
+      // D1-D9 requests additional data, but the payload fits entirely in D0.
+      // Returning just the address indicates there is no more data to send.
+      sendSDI12Response(String(address)); 
+    }
   }
   
   // 5. Continuous Measurement: aR0! to aR9!
   else if (cmd.length() == 4 &&
            cmd[0] == address &&
            cmd[1] == 'R' &&
-           cmd[2] >= '0' &&
-           cmd[2] <= '9' &&
            cmd[3] == '!') {
 
-    readSensors();
-    
-    String response = String(address) + dataBuffer;
-    sendSDI12Response(response);
+    if (cmd[2] == '0') {
+      // R0 requests a continuous reading
+      readSensors();
+      String response = String(address) + dataBuffer;
+      sendSDI12Response(response);
+    } else if (cmd[2] > '0' && cmd[2] <= '9') {
+      // R1-R9 requests additional data, but the payload fits entirely in R0.
+      sendSDI12Response(String(address)); 
+    }
   }
 }
 
