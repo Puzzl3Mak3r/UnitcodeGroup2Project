@@ -272,8 +272,62 @@ void clearSDCard() {
 
 // --- LCD & BUTTONS ---
 void initLCD() {
-  // TODO: Initialize the Adafruit_ST7735 library using Software SPI
-  // Draw the static text for the dashboard (e.g., "Temp:", "Humidity:")
+
+  tft.initR(INITR_BLACKTAB);
+  tft.setRotation(3);           // Rotate to landscape orientation (160x128 pixels)
+  tft.fillScreen(ST77XX_BLACK); // Clear display memory
+
+
+    // Static UI labels
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(5, 10);
+  tft.print("EDGE DATA HUB");
+
+  tft.setCursor(5, 30);
+  tft.print("Temp:");
+
+  tft.setCursor(5, 50);
+  tft.print("Humidity:");
+
+  tft.setCursor(5, 70);
+  tft.print("Pressure:");
+
+  tft.setCursor(5, 90);
+  tft.print("Light:");
+}
+
+void updateDashboard() {
+  tft.fillRect(60, 25, 100, 80, ST77XX_BLACK); 
+  // 1. Draw static text labels
+
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_GREEN);
+
+  tft.setCursor(60, 30);
+  tft.print(bme.temperature);
+
+  tft.setCursor(60, 50);
+  tft.print(bme.humidity);
+
+  tft.setCursor(60, 70);
+  tft.print(bme.pressure / 100.0);
+  tft.setCursor(60, 90);
+  tft.print(lightMeter.readLightLevel());
+  }
+
+void checkPushbuttons() {
+  // Button 1 
+if (digitalRead(2) == LOW) {
+delay(200); // debounce
+executeLogCycle();
+}
+
+  // Button 2 
+if (digitalRead(3) == LOW) {
+delay(200); // debounce
+clearSDCard();
+}
 }
 
 void updateDashboard() {
