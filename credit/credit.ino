@@ -2,8 +2,8 @@
  * Unit: ENG20009 Engineering Technology Inquiry Project
  * Group 2 Members:
  * - Jaymond Martin (102579706)   [Task: Standalone Logic, RTC & Timestamps]
- * - Taha Mohamed Shaik (105910382)
- * - Chinmayee Sharma (105702631)
+ * - Taha Mohamed Shaik (105910382) [Task: SD Card File Management]
+ * - Chinmayee Sharma (105702631) [Task: LCD Dashboard & Pushbuttons]
  * 
  * Description: Project Credit Task - The "Edge Data Hub"
  * Transforms the compliant sensor node into a standalone logger. 
@@ -15,7 +15,7 @@
  * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO -> Pin 7
  * - TFT LCD -> Software SPI (Pins 10, 7, 11, 13)
  * - SD Card -> Software SPI (Pins A3, 12, 11, 13)
- * - Pushbuttons -> Pins 2, 3, 4, 5
+ * - Pushbuttons -> Pins 2, 3
  */
 
 #include <Wire.h>
@@ -39,16 +39,9 @@ RTC_DS1307 rtc;
 #define TFT_SCLK  13   
 #define TFT_MOSI  11   
 
-// --- OBJECT INITIALIZATION ---
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-
-// --- SDI-12 STATE VARIABLES ---
-#define DIRO_PIN 7 
-char address = '0';
-String command = "";
-String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
-
-
+// Pushbutton Pins
+const int btnLogPin = 2;   // Manually trigger a log
+const int btnClearPin = 3; // Clear the SD card
 
 // SD Card Pins
 const uint8_t SD_CS_PIN = A3;
@@ -56,9 +49,28 @@ const uint8_t SOFT_MISO_PIN = 12;
 const uint8_t SOFT_MOSI_PIN = 11;
 const uint8_t SOFT_SCK_PIN  = 13;
 
+// --- OBJECT INITIALIZATION ---
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+
+// Setup SD Software SPI Driver utilizing the SdFat library
+SoftSpiDriver<SOFT_MISO_PIN, SOFT_MOSI_PIN, SOFT_SCK_PIN> softSpi;
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SD_SCK_MHZ(0), &softSpi)
+SdFs sd;
+FsFile logFile;
+
+// --- SDI-12 STATE VARIABLES ---
+#define DIRO_PIN 7 
+char address = '0';
+String command = "";
+String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
+
 // --- STANDALONE LOGGING VARIABLES ---
 unsigned long lastLogTime = 0;
 const unsigned long logInterval = 60000; // 60 seconds in milliseconds
+
+// --- BUTTON STATE VARIABLES ---
+int btnLogLastState = HIGH;
+int btnClearLastState = HIGH;
 
 // Function prototypes
 void handleCommand(String cmd);
@@ -66,20 +78,12 @@ void sendSDI12Response(String message);
 void readSensors();
 void executeLogCycle();
 String getTimestamp();
-
-// Prototype functions
 void initSDCard();
 void logToSDCard(String logEntry);
 void clearSDCard();
 void initLCD();
 void updateDashboard();
 void checkPushbuttons();
-
-// Setup SD Software SPI Driver utilizing the SdFat library (Taha)
-SoftSpiDriver<SOFT_MISO_PIN, SOFT_MOSI_PIN, SOFT_SCK_PIN> softSpi;
-#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SD_SCK_MHZ(0), &softSpi)
-SdFs sd;
-FsFile logFile;
 
 void setup() {
   Serial.begin(9600);
@@ -90,22 +94,9 @@ void setup() {
   pinMode(DIRO_PIN, OUTPUT);
   digitalWrite(DIRO_PIN, HIGH);
 
-  // 2. Initialize SD Card (Taha)
-  pinMode(SD_CS_PIN, OUTPUT);
-  digitalWrite(SD_CS_PIN, HIGH); 
-  if (!sd.begin(SD_CONFIG)) {
-    Serial.println("Error: SD card initialization failed!");
-    sd.initErrorHalt();
-  } else {
-    Serial.println("SD Card initialized.");
-    
-    // Create or append to the telemetry log file
-    if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_APPEND)) {
-      logFile.println("Timestamp, X_Accel(m/s^2), Y_Accel(m/s^2), Z_Accel(m/s^2)");
-      logFile.close();
-      Serial.println("Created/Opened LOG.CSV");
-    }
-  }
+  // 2. Initialize Pushbuttons with internal pull-ups
+  pinMode(btnLogPin, INPUT_PULLUP);
+  pinMode(btnClearPin, INPUT_PULLUP);
   
   // 3. Initialize I2C Bus & Sensors
   Wire.begin();
@@ -166,7 +157,7 @@ void loop() {
   }
 
   // ==========================================================
-  // AUTHOR: 
+  // AUTHOR: Chinmayee Sharma (105702631)
   // TASK: Config Menu Polling
   // ==========================================================
   checkPushbuttons();
@@ -254,12 +245,26 @@ void sendSDI12Response(String message) {
 }
 
 // ==========================================================
-// TEAMMATE PLACEHOLDER FUNCTIONS
+// AUTHOR: Taha Mohamed Shaik (105910382)
+// TASK: SD Card File Management
 // ==========================================================
-
-// --- SD CARD ---
 void initSDCard() {
-  // TODO: Initialize the SdFat library using Software SPI (Pins A3, 12, 11, 13)
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH); 
+  
+  if (!sd.begin(SD_CONFIG)) {
+    Serial.println("Error: SD card initialization failed!");
+    sd.initErrorHalt();
+  } else {
+    Serial.println("SD Card initialized.");
+    
+    // Create or append to the telemetry log file
+    if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_APPEND)) {
+      logFile.println("Timestamp, SDI-12_Buffer(+Temp+Pressure+Humidity+Gas+Lux)");
+      logFile.close();
+      Serial.println("Created/Opened LOG.CSV");
+    }
+  }
 }
 
 void logToSDCard(String logEntry) {
@@ -284,13 +289,14 @@ void clearSDCard() {
   }
 }
 
-// --- LCD & BUTTONS ---
+// ==========================================================
+// AUTHOR: Chinmayee Sharma (105702631)
+// TASK: LCD Dashboard & Pushbuttons
+// ==========================================================
 void initLCD() {
-
   tft.initR(INITR_BLACKTAB);
   tft.setRotation(3);           // Rotate to landscape orientation (160x128 pixels)
   tft.fillScreen(ST77XX_BLACK); // Clear display memory
-
 
   // Static UI labels
   tft.setTextSize(1);
@@ -312,33 +318,45 @@ void initLCD() {
 }
 
 void updateDashboard() {
-  tft.fillRect(60, 25, 100, 80, ST77XX_BLACK); 
-  // 1. Draw static text labels
+  // Clear only the data area to prevent screen flickering
+  tft.fillRect(65, 25, 95, 80, ST77XX_BLACK); 
 
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_GREEN);
 
-  tft.setCursor(60, 30);
+  tft.setCursor(65, 30);
   tft.print(bme.temperature);
+  tft.print(" C");
 
-  tft.setCursor(60, 50);
+  tft.setCursor(65, 50);
   tft.print(bme.humidity);
+  tft.print(" %");
 
-  tft.setCursor(60, 70);
+  tft.setCursor(65, 70);
   tft.print(bme.pressure / 100.0);
-  tft.setCursor(60, 90);
+  tft.print(" hPa");
+  
+  tft.setCursor(65, 90);
   tft.print(lightMeter.readLightLevel());
-  }
+  tft.print(" Lux");
+}
 
 void checkPushbuttons() {
-  // Button 1 
-  if (digitalRead(2) == LOW) {
-  delay(200); // debounce
-  executeLogCycle();
-}
-  // Button 2 
-if (digitalRead(3) == LOW) {
-delay(200); // debounce
-clearSDCard();
-}
+  // Read the current physical state of the buttons
+  int btnLogState = digitalRead(btnLogPin);
+  int btnClearState = digitalRead(btnClearPin);
+
+  // Button 1: Manual Log Trigger (Falling Edge Detection)
+  if (btnLogState == LOW && btnLogLastState == HIGH) {
+    executeLogCycle();
+    delay(50); // Software debounce
+  }
+  btnLogLastState = btnLogState;
+
+  // Button 2: Clear SD Card (Falling Edge Detection)
+  if (btnClearState == LOW && btnClearLastState == HIGH) {
+    clearSDCard();
+    delay(50); // Software debounce
+  }
+  btnClearLastState = btnClearState;
 }
