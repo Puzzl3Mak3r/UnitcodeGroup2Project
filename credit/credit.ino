@@ -61,6 +61,12 @@ void initLCD();
 void updateDashboard();
 void checkPushbuttons();
 
+// Setup SD Software SPI Driver utilizing the SdFat library (Taha)
+SoftSpiDriver<SOFT_MISO_PIN, SOFT_MOSI_PIN, SOFT_SCK_PIN> softSpi;
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SD_SCK_MHZ(0), &softSpi)
+SdFs sd;
+FsFile logFile;
+
 void setup() {
   Serial.begin(9600);
   Serial.println("--- Edge Data Hub Booting ---");
@@ -71,7 +77,6 @@ void setup() {
   digitalWrite(DIRO_PIN, HIGH);
 
   // 2. Initialize SD Card (Taha)
-
   pinMode(SD_CS_PIN, OUTPUT);
   digitalWrite(SD_CS_PIN, HIGH); 
   if (!sd.begin(SD_CONFIG)) {
