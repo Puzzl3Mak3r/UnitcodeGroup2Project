@@ -20,6 +20,7 @@
 
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
+#include <Adafruit_ST7735.h>
 #include <Adafruit_BME680.h>
 #include <BH1750.h>
 #include "RTClib.h"
@@ -30,11 +31,24 @@ Adafruit_BME680 bme;
 BH1750 lightMeter;
 RTC_DS1307 rtc;
 
+// --- HARDWARE PIN DEFINITIONS ---
+// TFT LCD Pins
+#define TFT_CS    10
+#define TFT_RST   6 
+#define TFT_DC    7 
+#define TFT_SCLK  13   
+#define TFT_MOSI  11   
+
+// --- OBJECT INITIALIZATION ---
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+
 // --- SDI-12 STATE VARIABLES ---
 #define DIRO_PIN 7 
 char address = '0';
 String command = "";
 String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
+
+
 
 // SD Card Pins
 const uint8_t SD_CS_PIN = A3;
@@ -278,7 +292,7 @@ void initLCD() {
   tft.fillScreen(ST77XX_BLACK); // Clear display memory
 
 
-    // Static UI labels
+  // Static UI labels
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
   tft.setCursor(5, 10);
@@ -317,25 +331,14 @@ void updateDashboard() {
   }
 
 void checkPushbuttons() {
-  // Button 1 
-if (digitalRead(2) == LOW) {
-delay(200); // debounce
-executeLogCycle();
+  // Button 1 
+  if (digitalRead(2) == LOW) {
+  delay(200); // debounce
+  executeLogCycle();
 }
-
-  // Button 2 
+  // Button 2 
 if (digitalRead(3) == LOW) {
 delay(200); // debounce
 clearSDCard();
 }
-}
-
-void updateDashboard() {
-  // TODO: Print the current sensor values to the LCD
-}
-
-void checkPushbuttons() {
-  // TODO: Poll the pushbuttons (Pins 2, 3, 4, 5) with debounce logic
-  // If Button 1 is pressed: Call executeLogCycle() to manually trigger a log
-  // If Button 2 is pressed: Call clearSDCard()
 }
