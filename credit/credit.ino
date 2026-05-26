@@ -23,6 +23,7 @@
 #include <Adafruit_BME680.h>
 #include <BH1750.h>
 #include "RTClib.h"
+#include "SdFat.h"
 
 // --- SENSOR & RTC OBJECTS ---
 Adafruit_BME680 bme;
@@ -33,7 +34,13 @@ RTC_DS1307 rtc;
 #define DIRO_PIN 7 
 char address = '0';
 String command = "";
-String dataBuffer = "+0.00+0.00+0.00+0.00+0.00"; 
+String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
+
+// SD Card Pins
+const uint8_t SD_CS_PIN = A3;
+const uint8_t SOFT_MISO_PIN = 12;
+const uint8_t SOFT_MOSI_PIN = 11;
+const uint8_t SOFT_SCK_PIN  = 13;
 
 // --- STANDALONE LOGGING VARIABLES ---
 unsigned long lastLogTime = 0;
@@ -61,9 +68,27 @@ void setup() {
   // 1. Initialize SDI-12 UART
   Serial1.begin(1200, SERIAL_7E1);
   pinMode(DIRO_PIN, OUTPUT);
-  digitalWrite(DIRO_PIN, HIGH); 
+  digitalWrite(DIRO_PIN, HIGH);
+
+  // 2. Initialize SD Card (Taha)
+
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH); 
+  if (!sd.begin(SD_CONFIG)) {
+    Serial.println("Error: SD card initialization failed!");
+    sd.initErrorHalt();
+  } else {
+    Serial.println("SD Card initialized.");
+    
+    // Create or append to the telemetry log file
+    if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_APPEND)) {
+      logFile.println("Timestamp, X_Accel(m/s^2), Y_Accel(m/s^2), Z_Accel(m/s^2)");
+      logFile.close();
+      Serial.println("Created/Opened LOG.CSV");
+    }
+  }
   
-  // 2. Initialize I2C Bus & Sensors
+  // 3. Initialize I2C Bus & Sensors
   Wire.begin();
 
   if (!lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
@@ -79,7 +104,7 @@ void setup() {
     bme.setGasHeater(320, 150); 
   }
 
-  // 3. Initialize RTC (Jaymond's Task)
+  // 4. Initialize RTC (Jaymond's Task)
   if (!rtc.begin()) {
     Serial.println("Error: RTC not found on I2C bus!");
   }
@@ -88,7 +113,7 @@ void setup() {
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
 
-  // 4. Initialize Teammate Modules
+  // 5. Initialize Teammate Modules
   initSDCard();
   initLCD();
 
@@ -219,11 +244,25 @@ void initSDCard() {
 }
 
 void logToSDCard(String logEntry) {
-  // TODO: Open the CSV file, append the logEntry string, and close it
+  // Open the CSV file, append the logEntry string, and close it
+  if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_APPEND)) {
+    logFile.println(logEntry);
+    logFile.close();
+  } else {
+    Serial.println("Error: Failed to open LOG.CSV for appending!");
+  }
 }
 
 void clearSDCard() {
-  // TODO: Delete or overwrite the CSV file to clear memory
+  // Overwrite the CSV file by opening with O_TRUNC to clear memory,
+  // then safely rewrite the header row.
+  if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_TRUNC)) {
+    logFile.println("Timestamp, SDI-12_Buffer(+Temp+Pressure+Humidity+Gas+Lux)");
+    logFile.close();
+    Serial.println("LOG.CSV cleared and reset.");
+  } else {
+    Serial.println("Error: Failed to clear LOG.CSV!");
+  }
 }
 
 // --- LCD & BUTTONS ---
