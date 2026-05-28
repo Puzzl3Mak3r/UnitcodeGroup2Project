@@ -41,6 +41,7 @@ RTC_DS1307 rtc;
 #define TFT_DC    7 
 #define TFT_SCLK  13   
 #define TFT_MOSI  11   
+#define COMM_LED 13
 
 // Pushbutton Pins
 const int btnLogPin = 2;   
@@ -110,6 +111,9 @@ void setup() {
   // 2. Initialize Pushbuttons with internal pull-ups
   pinMode(btnLogPin, INPUT_PULLUP);
   pinMode(btnClearPin, INPUT_PULLUP);
+
+  pinMode(COMM_LED, OUTPUT);
+  digitalWrite(COMM_LED, LOW);
   
   // 3. Initialize I2C Bus & Sensors
   Wire.begin();
@@ -415,8 +419,10 @@ void checkPushbuttons() {
 // TASK: Distinction - Visual Indicator
 // ==========================================================
 void toggleCommunicationLED() {
+  
+  digitalWrite(COMM_LED, !digitalRead(COMM_LED));
+}
   // TODO: Chinmayee - Write the logic to toggle an LED on the board.
   // Note: This function runs directly inside the hardware ISR every 10ms.
   // Keep the code extremely short and fast (e.g., digitalWrite).
   // You will also need to define the LED pin at the top of the file and set it as an OUTPUT in setup().
-}
