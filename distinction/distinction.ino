@@ -49,15 +49,11 @@ const int btnClearPin = 3;
 
 // SD Card Pins
 const uint8_t SD_CS_PIN = A3;
-const uint8_t SOFT_MISO_PIN = 12;
-const uint8_t SOFT_MOSI_PIN = 11;
-const uint8_t SOFT_SCK_PIN  = 13;
 
 // --- OBJECT INITIALIZATION ---
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 
-SoftSpiDriver<SOFT_MISO_PIN, SOFT_MOSI_PIN, SOFT_SCK_PIN> softSpi;
-#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SD_SCK_MHZ(0), &softSpi)
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SD_SCK_MHZ(10))
 SdFs sd;
 FsFile logFile;
 
@@ -74,6 +70,11 @@ const unsigned long logInterval = 60000; // 60 seconds in milliseconds
 // --- BUTTON STATE VARIABLES ---
 int btnLogLastState = HIGH;
 int btnClearLastState = HIGH;
+
+// --- DATA AVERAGING VARIABLES ---
+float luxTotal = 0.0;
+unsigned long luxSampleCount = 0;
+float averagedLux = 0.0;
 
 // --- DISTINCTION ISR VARIABLES ---
 // Variables modified inside an ISR must be volatile so they are fetched directly from RAM
@@ -329,21 +330,28 @@ void clearSDCard() {
 // serialEvent1() acts as an interrupt routine that fires automatically 
 // whenever data arrives on the Serial1 RX pin, replacing the main loop polling.
 void serialEvent1() {
-  // TODO: Taha - Move the UART reading logic from the Pass task into here.
-  // Read the incoming byte, append it to the 'command' string, and call 
-  // handleCommand() when the '!' terminator is received.
+  while (Serial1.available() > 0) {
+    char c = (char)Serial1.read();
+    command += c;
+    if (c == '!') {
+      handleCommand(command);
+      command = "";
+    }
+  }
 }
 
 void accumulateLuxData(float currentLux) {
-  // TODO: Taha - Add the currentLux to a running total and increment a sample counter.
-  // This function is called safely from the main loop every 10ms.
+  luxTotal += currentLux;
+  luxSampleCount++;
 }
 
 void calculateAverages() {
-  // TODO: Taha - Calculate the average lux from the accumulated data.
-  // Reset the running total and counter for the next cycle.
-  // Append the averaged lux value to the global 'dataBuffer' string.
-  // Example: dataBuffer += "+" + String(averagedLux, 2);
+  if (luxSampleCount > 0) {
+    averagedLux = luxTotal / luxSampleCount;
+    luxTotal = 0.0;
+    luxSampleCount = 0;
+  }
+  dataBuffer += "+" + String(averagedLux, 2);
 }
 
 // ==========================================================
@@ -392,8 +400,7 @@ void updateDashboard() {
   tft.print(" hPa");
   
   tft.setCursor(65, 90);
-  // Note: This will need to be updated to display the averaged lux once calculateAverages() is finished
-  tft.print(lightMeter.readLightLevel()); 
+  tft.print(averagedLux); 
   tft.print(" Lux");
 }
 
