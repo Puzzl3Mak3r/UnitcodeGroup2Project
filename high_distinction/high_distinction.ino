@@ -38,14 +38,14 @@ RTC_DS1307 rtc;
 
 // --- HARDWARE PIN DEFINITIONS ---
 // TFT LCD Pins
-#define TFT_CS    10
-#define TFT_RST   6 
-#define TFT_DC    7 
-#define TFT_SCLK  13   
-#define TFT_MOSI  11   
+const int TFT_CS   = 10;
+const int TFT_RST  = 6; 
+const int TFT_DC   = 7; 
+const int TFT_SCLK = 13;   
+const int TFT_MOSI = 11;   
 
 // Visual Indicator LED
-#define COMM_LED 9
+const int COMM_LED = 9;
 
 // Pushbutton Pins
 const int btnLogPin = 2;   
@@ -65,7 +65,7 @@ SdFs sd;
 FsFile logFile;
 
 // --- SDI-12 STATE VARIABLES ---
-#define DIRO_PIN 8
+const int DIRO_PIN = 8;
 char address = '0';
 String commandBuffer = "";
 String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
@@ -121,6 +121,7 @@ void handleSDI12TX();
 void processIncomingUART();
 void executeLogCycle();
 String getTimestamp();
+String formatSDI12Value(float value);
 void initSDCard();
 void logToSDCard(String logEntry);
 void clearSDCard();
@@ -139,9 +140,8 @@ void processCommandFSM(char c);
 
 void setup() {
   Serial.begin(9600);
-  while (!Serial); 
+  delay(1000); // Allow IDE Serial Monitor to connect without blocking standalone operation
   Serial.println("--- Advanced Event-Driven Node Booting ---");
-  Serial.println("Test4");
 
   // ==========================================================
   // AUTHOR: Jaymond Martin (102579706)
@@ -149,7 +149,7 @@ void setup() {
   // ==========================================================
   // Configure the WDT to trigger a full hardware reset if not fed.
   // Slow clock runs at 32.768 kHz. WDT frequency is 32768 / 128 = 256 Hz.
-  // We set the timeout to 4 seconds (256 * 4) to safely accommodate the 3-second BME680 cycle.
+  // The timeout is set to 4 seconds (256 * 4) to safely accommodate the 3-second BME680 cycle.
   WDT->WDT_MR = WDT_MR_WDD(0xFFF) | 
                 WDT_MR_WDRSTEN | 
                 WDT_MR_WDV(256 * 4); 
@@ -210,11 +210,11 @@ void setup() {
   NVIC_SetPriority(USART0_IRQn, 0); 
   NVIC_SetPriority(PIOA_IRQn, 1);
   for (int i = TC0_IRQn; i <= TC8_IRQn; i++) {
-    NVIC_SetPriority((IRQn_Type)i, 4); 
+    NVIC_SetPriority((IRQn_Type)i, 4);
   }
 
   Serial.println("System Ready. Fail-Safe WDT Active.");
-  void printSDCardContents();
+  printSDCardContents();
 }
 
 void loop() {
@@ -224,7 +224,7 @@ void loop() {
   // ==========================================================
   // Restart the WDT to prevent a hardware reset. If the loop freezes 
   // (e.g., stuck in an infinite I2C while-loop), the board will reboot.
-  WDT->WDT_CR = WDT_CR_KEY(WDT_KEY) | WDT_CR_WDRSTT; // Comment this out to test wdt
+  WDT->WDT_CR = WDT_CR_KEY(WDT_KEY) | WDT_CR_WDRSTT;
 
   // ==========================================================
   // ASYNCHRONOUS BME680 DATA COLLECTION
@@ -278,7 +278,7 @@ void loop() {
       executeLogCycle();
     }
     
-    // TODO: Taha - Call your custom improvement logic here if necessary
+    // TODO (Taha): Call custom improvement logic here once finalized.
   }
 }
 
@@ -303,6 +303,14 @@ void bmeSamplingISR() {
   }
 }
 
+String formatSDI12Value(float value) {
+  if (value >= 0.0) {
+    return "+" + String(value, 2);
+  } else {
+    return String(value, 2); 
+  }
+}
+
 void updateDataBuffer() {
   float safeTemp, safePress, safeHum, safeGas, safeLux;
 
@@ -319,11 +327,12 @@ void updateDataBuffer() {
   }
   interrupts();
 
-  dataBuffer = "+" + String(safeTemp, 2) + 
-               "+" + String(safePress, 2) + 
-               "+" + String(safeHum, 2) + 
-               "+" + String(safeGas, 2) + 
-               "+" + String(safeLux, 2);
+  dataBuffer = "";
+  dataBuffer += formatSDI12Value(safeTemp);
+  dataBuffer += formatSDI12Value(safePress);
+  dataBuffer += formatSDI12Value(safeHum);
+  dataBuffer += formatSDI12Value(safeGas);
+  dataBuffer += formatSDI12Value(safeLux);
 }
 
 // ==========================================================
@@ -331,13 +340,13 @@ void updateDataBuffer() {
 // HD TASK: State-Machine Parser (FSM)
 // ==========================================================
 void processCommandFSM(char c) {
-  // TODO: Chinmayee - Replace the old string-based handleCommand() logic with a 
-  // robust Finite State Machine (FSM) that processes characters one by one.
-  // This needs to handle partial or corrupted SDI-12 commands gracefully.
+  // TODO (Chinmayee): Implement the Finite State Machine (FSM) here.
+  // This needs to process characters one by one to handle corrupted SDI-12 
+  // commands gracefully, replacing the legacy handleCommand() logic.
 }
 
 // ==========================================================
-// LEGACY COMMAND HANDLER (To be replaced by FSM)
+// LEGACY COMMAND HANDLER (Active until FSM is implemented)
 // ==========================================================
 void handleCommand(String cmd) {
   cmd.trim();
@@ -366,6 +375,12 @@ void handleCommand(String cmd) {
   }
 }
 
+// ==========================================================
+// AUTHOR: Jaymond Martin (102579706)
+// TASK: Distinction - Hardware-Level SDI-12 TX FSM
+// ==========================================================
+
+// Initiates asynchronous transmission using boolean flags and millis()
 void triggerSDI12Response(String message) {
   Serial.print("[");
   Serial.print(millis());
@@ -376,29 +391,46 @@ void triggerSDI12Response(String message) {
   txDuration = pendingTxMessage.length() * 10; 
   
   ignoreRX = true; 
-  digitalWrite(DIRO_PIN, LOW); 
   
+  // Phase 1: Wait for Master to release the line. 
+  // Do NOT pull DIRO_PIN low yet to prevent bus collisions.
   txTimer = millis();
   txStage = 1; 
 }
 
+// Evaluates the transmission sequence without utilizing blocking delay() or flush()
 void handleSDI12TX() {
   if (txStage == 1) {
-    if (millis() - txTimer >= 2) {
-      Serial1.print(pendingTxMessage);
+    // SDI-12 Specification: Slave must wait at least 8.33ms 
+    // after receiving a command before driving the bus.
+    if (millis() - txTimer >= 10) {
+      digitalWrite(DIRO_PIN, LOW); // Claim the bus
+      txTimer = millis();
       txStage = 2;
     }
   } 
   else if (txStage == 2) {
-    if (millis() - txTimer >= txDuration) {
-      if (USART0->US_CSR & US_CSR_TXEMPTY) {
-        digitalWrite(DIRO_PIN, HIGH); 
-        txTimer = millis();
-        txStage = 3;
-      }
+    // Allow the physical RS485 transceiver 2ms to open its TX gates 
+    // before pushing bits into the hardware buffer.
+    if (millis() - txTimer >= 2) {
+      Serial1.print(pendingTxMessage);
+      txTimer = millis();
+      txStage = 3;
     }
   } 
   else if (txStage == 3) {
+    // Wait for the calculated duration so the software buffer empties
+    if (millis() - txTimer >= txDuration) {
+      // Confirm the silicon register has pushed the final stop bit
+      if (USART0->US_CSR & US_CSR_TXEMPTY) {
+        digitalWrite(DIRO_PIN, HIGH); // Revert to RX mode
+        txTimer = millis();
+        txStage = 4;
+      }
+    }
+  } 
+  else if (txStage == 4) {
+    // Wait 25ms for line capacitance to drain and flush bounce noise
     if (millis() - txTimer >= 25) { 
       while(Serial1.available() > 0) {
         Serial1.read(); 
@@ -431,7 +463,7 @@ void processIncomingUART() {
       continue; 
     }
 
-    // TODO: Chinmayee - Once processCommandFSM() is ready, pass 'incomingByte' 
+    // TODO (Chinmayee): Once processCommandFSM() is ready, pass 'incomingByte' 
     // directly to it here and remove the string buffering logic below.
 
     if (incomingByte != '\r' && incomingByte != '\n') {
@@ -439,6 +471,11 @@ void processIncomingUART() {
     }
 
     if (incomingByte == '!') {
+      Serial.print("[");
+      Serial.print(millis());
+      Serial.print("] Received Raw Buffer: ");
+      Serial.println(commandBuffer);
+      
       String cleanCmd = "";
       int len = commandBuffer.length();
 
@@ -454,8 +491,18 @@ void processIncomingUART() {
       }
 
       if (cleanCmd != "") {
+        Serial.print("[");
+        Serial.print(millis());
+        Serial.print("] Parsed Clean Command: ");
+        Serial.println(cleanCmd);
         handleCommand(cleanCmd);
+      } else {
+        Serial.print("[");
+        Serial.print(millis());
+        Serial.print("] Ignored Noise Buffer. Active Address: ");
+        Serial.println(address);
       }
+      
       commandBuffer = ""; 
     }
     
@@ -472,8 +519,9 @@ void processIncomingUART() {
 void executeLogCycle() {
   updateDataBuffer();
 
-  //Serial.println("[TEST] Simulating a severe I2C lockup now. Board should freeze...");
-  //delay(5000); // 5-second freeze. The WDT times out at 4 seconds!
+  // DEBUGGING: Uncomment the delay below to simulate a 5-second severe I2C 
+  // lockup and verify that the 4-second Watchdog Timer correctly resets the board.
+  // delay(5000); 
 
   String timestamp = getTimestamp();
   String logEntry = timestamp + ", " + dataBuffer;
@@ -549,6 +597,15 @@ void printSDCardContents() {
   if (logFile.open("LOG.CSV", O_READ)) {
     while (logFile.available()) {
       Serial.write(logFile.read());
+      
+      // ==========================================================
+      // AUTHOR: Jaymond Martin (102579706)
+      // HD TASK: Watchdog Timer (WDT) Feeding
+      // ==========================================================
+      // Kicking the watchdog inside this blocking loop prevents a 
+      // hardware reset. Printing a large file at 9600 baud takes 
+      // significant time and will easily trip the 4-second WDT limit.
+      WDT->WDT_CR = WDT_CR_KEY(WDT_KEY) | WDT_CR_WDRSTT;
     }
     logFile.close();
     Serial.println("\n--- End of File ---\n");

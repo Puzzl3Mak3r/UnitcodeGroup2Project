@@ -6,14 +6,16 @@
  * - Jaymond Martin (102579706)   [Tasks: Standalone Logic, Dual Hardware Timer ISRs, Hardware-Level SDI-12 TX, NVIC Configuration]
  * - Taha Mohamed Shaik (105910382) [Tasks: SD Card Logging, True Hardware RX Interrupt, Data Averaging]
  * - Chinmayee Sharma (105702631) [Tasks: LCD Dashboard, Pushbutton ISRs, Visual Indicator]
- * * Description: Project Distinction Task - "High-Performance Interrupt Architecture"
+ * 
+ * Description: Project Distinction Task - "High-Performance Interrupt Architecture"
  * Upgrades the Edge Data Hub by replacing basic polling with an interrupt-driven 
  * architecture. Utilizes a true hardware interrupt for UART RX detection and dual 
  * hardware timers for independent I2C sensor sampling. Implements ARM NVIC priority 
  * shifting to ensure SDI-12 communication preempts sensor reads, preventing data loss.
- * * Hardware Mapping (Swinburne Arduino Due Board):
+ * 
+ * Hardware Mapping (Swinburne Arduino Due Board):
  * - BME680 & BH1750 & DS1307 RTC -> I2C (SDA/SCL)
- * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO -> Pin 7
+ * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO -> Pin 8
  * - TFT LCD -> Software SPI (Pins 10, 7, 11, 13)
  * - SD Card -> Software SPI (Pins A3, 12, 11, 13)
  * - Pushbuttons -> Pins 2, 3 (Hardware Interrupts)
@@ -38,14 +40,14 @@ RTC_DS1307 rtc;
 
 // --- HARDWARE PIN DEFINITIONS ---
 // TFT LCD Pins
-#define TFT_CS    10
-#define TFT_RST   6 
-#define TFT_DC    7 
-#define TFT_SCLK  13   
-#define TFT_MOSI  11   
+const int TFT_CS   = 10;
+const int TFT_RST  = 6; 
+const int TFT_DC   = 7; 
+const int TFT_SCLK = 13;   
+const int TFT_MOSI = 11;   
 
 // Visual Indicator LED
-#define COMM_LED 9
+const int COMM_LED = 9;
 
 // Pushbutton Pins
 const int btnLogPin = 2;   
@@ -65,7 +67,7 @@ SdFs sd;
 FsFile logFile;
 
 // --- SDI-12 STATE VARIABLES ---
-#define DIRO_PIN 8
+const int DIRO_PIN = 8;
 char address = '0';
 String commandBuffer = "";
 String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
@@ -116,6 +118,7 @@ void handleSDI12TX();
 void processIncomingUART();
 void executeLogCycle();
 String getTimestamp();
+String formatSDI12Value(float value);
 void initSDCard();
 void logToSDCard(String logEntry);
 void clearSDCard();
@@ -131,9 +134,8 @@ void printSDCardContents();
 
 void setup() {
   Serial.begin(9600);
-  while (!Serial); 
+  delay(1000); // Wait for IDE Serial Monitor to connect before booting, but avoid standalone deadlock
   Serial.println("--- High-Performance Sensor Node Booting ---");
-  Serial.println("Test18");
 
   // 1. Initialize SDI-12 UART
   Serial1.begin(1200, SERIAL_7E1);
@@ -184,7 +186,10 @@ void setup() {
   initLCD();
 
   // 6. Initialize Dual Hardware Timers
-  // DueTimer takes arguments in microseconds. 150,000us = 150ms.
+  // Note: The project brief suggested a 10ms sampling rate, but the BH1750 operating 
+  // in CONTINUOUS_HIGH_RES_MODE physically requires ~120ms to integrate a measurement. 
+  // Setting the timer to 10ms would crash the I2C bus. Therefore, 150,000us (150ms) 
+  // is the optimal hardware-safe sampling interval.
   Timer3.attachInterrupt(luxSamplingISR);
   Timer3.start(150000); 
 
@@ -214,7 +219,6 @@ void setup() {
   
   // Dump the file contents to verify previous logs were saved
   printSDCardContents();
-}
 }
 
 void loop() {
@@ -326,11 +330,12 @@ void updateDataBuffer() {
   }
   interrupts();
 
-  dataBuffer = "+" + String(safeTemp, 2) + 
-               "+" + String(safePress, 2) + 
-               "+" + String(safeHum, 2) + 
-               "+" + String(safeGas, 2) + 
-               "+" + String(safeLux, 2);
+  dataBuffer = "";
+  dataBuffer += formatSDI12Value(safeTemp);
+  dataBuffer += formatSDI12Value(safePress);
+  dataBuffer += formatSDI12Value(safeHum);
+  dataBuffer += formatSDI12Value(safeGas);
+  dataBuffer += formatSDI12Value(safeLux);
 }
 
 // ==========================================================
@@ -374,6 +379,11 @@ void handleCommand(String cmd) {
   }
 }
 
+// ==========================================================
+// AUTHOR: Jaymond Martin (102579706)
+// TASK: Distinction - Hardware-Level SDI-12 TX FSM
+// ==========================================================
+
 // Initiates asynchronous transmission using boolean flags and millis()
 void triggerSDI12Response(String message) {
   Serial.print("[");
@@ -384,12 +394,13 @@ void triggerSDI12Response(String message) {
   pendingTxMessage = message + "\r\n";
   
   // Calculate max transmission time: ~8.33ms per char at 1200 baud. 
-  // We use 10ms per char to guarantee the software buffer pushes it out.
+  // Utilizing 10ms per char guarantees the software buffer pushes it out.
   txDuration = pendingTxMessage.length() * 10; 
   
   ignoreRX = true; 
-  digitalWrite(DIRO_PIN, LOW); // Switch RS485 to TX mode
   
+  // Phase 1: Wait for Master to release the line. 
+  // Do NOT pull DIRO_PIN low yet to prevent bus collisions.
   txTimer = millis();
   txStage = 1; 
 }
@@ -397,28 +408,39 @@ void triggerSDI12Response(String message) {
 // Evaluates the transmission sequence without utilizing blocking delay() or flush()
 void handleSDI12TX() {
   if (txStage == 1) {
-    if (millis() - txTimer >= 2) {
-      Serial1.print(pendingTxMessage);
+    // SDI-12 Specification: Slave must wait at least 8.33ms 
+    // after receiving a command before driving the bus.
+    if (millis() - txTimer >= 10) {
+      digitalWrite(DIRO_PIN, LOW); // Claim the bus
+      txTimer = millis();
       txStage = 2;
     }
   } 
   else if (txStage == 2) {
-    // Wait for the calculated duration so the software buffer has time to empty
-    if (millis() - txTimer >= txDuration) {
-      // NOW check the silicon register to ensure the final stop bit has left
-      if (USART0->US_CSR & US_CSR_TXEMPTY) {
-        digitalWrite(DIRO_PIN, HIGH); // Revert to RX mode
-        txTimer = millis();
-        txStage = 3;
-      }
+    // Allow the physical RS485 transceiver 2ms to open its TX gates 
+    // before pushing bits into the hardware buffer.
+    if (millis() - txTimer >= 2) {
+      Serial1.print(pendingTxMessage);
+      txTimer = millis();
+      txStage = 3;
     }
   } 
   else if (txStage == 3) {
-    // Increased from 10ms to 25ms. The line capacitance takes longer to drain 
-    // at 1200 baud than I anticipated, causing the U and ~ garbage bytes.
+    // Wait for the calculated duration so the software buffer empties
+    if (millis() - txTimer >= txDuration) {
+      // Confirm the silicon register has pushed the final stop bit
+      if (USART0->US_CSR & US_CSR_TXEMPTY) {
+        digitalWrite(DIRO_PIN, HIGH); // Revert to RX mode
+        txTimer = millis();
+        txStage = 4;
+      }
+    }
+  } 
+  else if (txStage == 4) {
+    // Wait 25ms for line capacitance to drain and flush bounce noise
     if (millis() - txTimer >= 25) { 
       while(Serial1.available() > 0) {
-        Serial1.read(); // Flush the bounce bytes
+        Serial1.read(); 
       }
       ignoreRX = false; 
       txStage = 0; 
@@ -433,7 +455,7 @@ void handleSDI12TX() {
 
 // Fires instantly when voltage changes on the RX line (Pin 19)
 void commISR() {
-  if (ignoreRX) return; // Instantly exit if we are switching TX/RX modes
+  if (ignoreRX) return; // Instantly exit if switching TX/RX modes
   
   rxActivity = true; 
   digitalWrite(COMM_LED, HIGH);
@@ -516,6 +538,15 @@ void processIncomingUART() {
 // AUTHOR: Jaymond Martin (102579706)
 // TASK: Credit - Core Logging & Timestamp Generation
 // ==========================================================
+
+String formatSDI12Value(float value) {
+  if (value >= 0.0) {
+    return "+" + String(value, 2);
+  } else {
+    return String(value, 2); // Negative values already include the '-' sign
+  }
+}
+
 void executeLogCycle() {
   updateDataBuffer();
 

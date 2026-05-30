@@ -12,7 +12,7 @@
  * 
  * Hardware Mapping (Swinburne Arduino Due Board):
  * - BME680 & BH1750 & DS1307 RTC -> I2C (SDA/SCL)
- * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO -> Pin 7
+ * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO -> Pin 8
  * - TFT LCD -> Software SPI (Pins 10, 7, 11, 13)
  * - SD Card -> Software SPI (Pins A3, 12, 11, 13)
  * - Pushbuttons -> Pins 2, 3
@@ -33,11 +33,11 @@ RTC_DS1307 rtc;
 
 // --- HARDWARE PIN DEFINITIONS ---
 // TFT LCD Pins
-#define TFT_CS    10
-#define TFT_RST   6 
-#define TFT_DC    7 
-#define TFT_SCLK  13   
-#define TFT_MOSI  11   
+const int TFT_CS   = 10;
+const int TFT_RST  = 6; 
+const int TFT_DC   = 7; 
+const int TFT_SCLK = 13;   
+const int TFT_MOSI = 11;   
 
 // Pushbutton Pins
 const int btnLogPin = 2;   
@@ -59,7 +59,7 @@ SdFs sd;
 FsFile logFile;
 
 // --- SDI-12 STATE VARIABLES ---
-#define DIRO_PIN 8
+const int DIRO_PIN = 8; // Separated from TFT_DC (Pin 7) to prevent hardware collision
 char address = '0';
 String command = "";
 String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
@@ -79,6 +79,7 @@ int btnClearLastState = HIGH;
 void handleCommand(String cmd);
 void sendSDI12Response(String message);
 void readSensors();
+String formatSDI12Value(float value);
 void executeLogCycle();
 String getTimestamp();
 void initSDCard();
@@ -91,9 +92,11 @@ void printSDCardContents();
 
 void setup() {
   Serial.begin(9600);
-  while (!Serial); // Wait for IDE Serial Monitor to connect before booting
+  
+  // Removed the blocking "while (!Serial);" to allow standalone operation 
+  // when powered from the SDI-12 bus without a PC connection.
+  delay(1000); 
   Serial.println("--- Edge Data Hub Booting ---");
-  Serial.println("Test1");
 
   // 1. Initialize SDI-12 UART
   Serial1.begin(1200, SERIAL_7E1);
@@ -144,7 +147,6 @@ void setup() {
   // Dump the file contents to verify previous logs were saved
   printSDCardContents();
 }
-
 
 void loop() {
   // ==========================================================
@@ -233,20 +235,26 @@ String getTimestamp() {
   return String(timeBuffer);
 }
 
-// ==========================================================
-// AUTHOR: Jaymond Martin (102579706)
-// TASK: Pass - Read Sensors
-// ==========================================================
+// Helper function to format float values with the correct SDI-12 polarity sign (+ or -)
+// This prevents formatting issues like "+-5.23" when values are negative.
+String formatSDI12Value(float value) {
+  if (value >= 0.0) {
+    return "+" + String(value, 2);
+  } else {
+    return String(value, 2); // Negative values already include the '-' sign
+  }
+}
+
 void readSensors() {
   if (!bme.performReading()) return;
   float lux = lightMeter.readLightLevel();
   
   dataBuffer = ""; 
-  dataBuffer += "+"; dataBuffer += String(bme.temperature, 2);
-  dataBuffer += "+"; dataBuffer += String(bme.pressure / 100.0, 2);
-  dataBuffer += "+"; dataBuffer += String(bme.humidity, 2);
-  dataBuffer += "+"; dataBuffer += String(bme.gas_resistance / 1000.0, 2);
-  dataBuffer += "+"; dataBuffer += String(lux, 2);
+  dataBuffer += formatSDI12Value(bme.temperature);
+  dataBuffer += formatSDI12Value(bme.pressure / 100.0);
+  dataBuffer += formatSDI12Value(bme.humidity);
+  dataBuffer += formatSDI12Value(bme.gas_resistance / 1000.0);
+  dataBuffer += formatSDI12Value(lux);
 }
 
 // ==========================================================
@@ -289,17 +297,31 @@ void handleCommand(String cmd) {
   }
 }
 
+// ==========================================================
+// AUTHOR: Jaymond Martin (102579706)
+// TASK: Credit - Hardware-Level SDI-12 TX (Blocking)
+// ==========================================================
 void sendSDI12Response(String message) {
   Serial.print("Sending Response: "); 
   Serial.println(message);
   
-  digitalWrite(DIRO_PIN, LOW); 
-  delay(100); 
+  // Phase 1: Wait 10ms for the master to release the line (SDI-12 Spec requires min 8.33ms)
+  // Since this is the Credit tier, blocking delays are expected and acceptable.
+  delay(10); 
+  
+  digitalWrite(DIRO_PIN, LOW); // Claim the bus
+  delay(2); // Transceiver stabilization time
+
   Serial1.print(message + "\r\n");
-  Serial1.flush(); 
-  Serial1.end();
-  Serial1.begin(1200, SERIAL_7E1);
-  digitalWrite(DIRO_PIN, HIGH); 
+  Serial1.flush(); // Halts execution until the hardware TX buffer is completely empty
+
+  digitalWrite(DIRO_PIN, HIGH); // Revert to RX mode instantly
+  
+  // Flush any bounce-back electrical noise caught by the RX buffer
+  delay(25);
+  while(Serial1.available() > 0) {
+    Serial1.read();
+  }
 }
 
 // ==========================================================
@@ -343,9 +365,9 @@ void clearSDCard() {
   }
 }
 
-// ==========================================================
+// ==========================================
 // DEBUG HELPER: Dump SD Card contents to Serial Monitor
-// ==========================================================
+// ==========================================
 void printSDCardContents() {
   Serial.println("\n--- Reading LOG.CSV ---");
   
@@ -362,10 +384,10 @@ void printSDCardContents() {
   }
 }
 
-// ==========================================================
+// ==========================================
 // AUTHOR: Chinmayee Sharma (105702631)
 // TASK: Credit - LCD Dashboard & Pushbuttons
-// ==========================================================
+// ==========================================
 void initLCD() {
   tft.initR(INITR_BLACKTAB);
   tft.setRotation(3);           

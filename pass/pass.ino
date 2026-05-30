@@ -1,9 +1,9 @@
 /*
  * Unit: ENG20009 Engineering Technology Inquiry Project
  * Group 2 Members:
- * - Jaymond Martin (102579706)   [Task: Read from both sensors]
- * - Chinmayee Sharma (105702631) [Task: Command handling look at table]
- * - Taha Mohamed Shaik (105910382) [Task: Check Serial monitor constantly]
+ * - Jaymond Martin (102579706)   [Task: I2C Sensor Integration & Data Formatting]
+ * - Chinmayee Sharma (105702631) [Task: SDI-12 Command Parser & Routing]
+ * - Taha Mohamed Shaik (105910382) [Task: UART Polling & Buffer Management]
  * 
  * Description: Project Pass Task - Compliant Sensor Node
  * This program implements the core SDI-12 logic to allow the Arduino to act 
@@ -14,7 +14,7 @@
  * Hardware Mapping (Swinburne Arduino Due Board):
  * - BME680 (Temp, Humidity, Pressure, Gas) -> I2C (SDA/SCL) at 0x76
  * - BH1750 (Light Intensity) -> I2C (SDA/SCL) at 0x23
- * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO Control -> Pin 7
+ * - SDI-12 UART Converter -> Serial1 (TX1=18, RX1=19), DIRO Control -> Pin 8
  */
 
 #include <Wire.h>
@@ -27,7 +27,7 @@ Adafruit_BME680 bme;
 BH1750 lightMeter;
 
 // --- SDI-12 STATE VARIABLES ---
-#define DIRO_PIN 7 // Direction control pin for UART to SDI-12 converter
+const int DIRO_PIN = 8; // Pin 8 controls the transceiver direction
 char address = '0';
 String command = "";
 String dataBuffer = "+0.00+0.00+0.00+0.00+0.00"; // Default empty buffer
@@ -36,10 +36,15 @@ String dataBuffer = "+0.00+0.00+0.00+0.00+0.00"; // Default empty buffer
 void handleCommand(String cmd);
 void sendSDI12Response(String message);
 void readSensors();
+String formatSDI12Value(float value);
 
 void setup() {
   // Initialize standard Serial for IDE debugging
   Serial.begin(9600);
+  
+  // A short delay allows the serial monitor to connect if attached, 
+  // but avoids blocking standalone boot when deployed on the bus.
+  delay(1000); 
   Serial.println("--- SDI-12 Environmental Sensor Node Booting ---");
 
   // Initialize SDI-12 UART Communication via TX1/RX1
@@ -77,11 +82,12 @@ void setup() {
 void loop() {
   // ==========================================================
   // AUTHOR: Taha Mohamed Shaik (105910382)
-  // TASK: Check Serial monitor constantly (UART Polling)
+  // TASK: UART Polling & Buffer Management
   // ==========================================================
   
-  // Continuously monitor the UART port connected to the SDI-12 converter
-  if (Serial1.available()) {
+  // Continuously monitor the UART port connected to the SDI-12 converter.
+  // Utilizing 'while' ensures the buffer empties entirely in a single pass.
+  while (Serial1.available() > 0) {
     int incomingByte = Serial1.read();
 
     // SDI-12 commands ALWAYS terminate with an exclamation mark '!' (ASCII 33)
@@ -106,7 +112,7 @@ void loop() {
 
 // ==========================================================
 // AUTHOR: Chinmayee Sharma (105702631)
-// TASK: Command handling look at table (SDI-12 Parser)
+// TASK: SDI-12 Command Parser & Routing
 // ==========================================================
 void handleCommand(String cmd) {
   cmd.trim();
@@ -175,23 +181,39 @@ void sendSDI12Response(String message) {
   Serial.print("Sending Response: "); 
   Serial.println(message);
   
-  digitalWrite(DIRO_PIN, LOW); // Set DIRO LOW to Transmit
-  delay(100); // Brief delay to allow the bus to stabilize
+  // Phase 1: Wait 10ms for the master to release the line (SDI-12 Spec requires min 8.33ms)
+  delay(10); 
   
+  digitalWrite(DIRO_PIN, LOW); // Claim the bus
+  delay(2); // Transceiver stabilization time
+
   Serial1.print(message + "\r\n");
-  Serial1.flush(); // Wait for the transmission to completely finish
+  Serial1.flush(); // Halts execution until the hardware TX buffer is completely empty
+
+  digitalWrite(DIRO_PIN, HIGH); // Revert to RX mode instantly
   
-  // Reset the Serial1 receiver to clear any garbage data generated during transmission
-  Serial1.end();
-  Serial1.begin(1200, SERIAL_7E1);
-  
-  digitalWrite(DIRO_PIN, HIGH); // Set DIRO HIGH to return to Receive mode
+  // Flush any bounce-back electrical noise caught by the RX buffer
+  delay(25);
+  while(Serial1.available() > 0) {
+    Serial1.read();
+  }
 }
 
 // ==========================================================
 // AUTHOR: Jaymond Martin (102579706)
-// TASK: Read from both sensors (Light & Temp)
+// TASK: I2C Sensor Integration & Data Formatting
 // ==========================================================
+
+// Helper function to format float values with the correct SDI-12 polarity sign (+ or -)
+// This prevents formatting issues like "+-5.23" when values are negative.
+String formatSDI12Value(float value) {
+  if (value >= 0.0) {
+    return "+" + String(value, 2);
+  } else {
+    return String(value, 2); // Negative values already include the '-' sign
+  }
+}
+
 void readSensors() {
   // Trigger a new reading from the BME680
   if (!bme.performReading()) {
@@ -209,24 +231,19 @@ void readSensors() {
   dataBuffer = ""; // Clear the previous reading
   
   // Append Temperature (*C)
-  dataBuffer += "+";
-  dataBuffer += String(bme.temperature, 2);
+  dataBuffer += formatSDI12Value(bme.temperature);
   
   // Append Pressure (hPa)
-  dataBuffer += "+";
-  dataBuffer += String(bme.pressure / 100.0, 2);
+  dataBuffer += formatSDI12Value(bme.pressure / 100.0);
   
   // Append Humidity (%)
-  dataBuffer += "+";
-  dataBuffer += String(bme.humidity, 2);
+  dataBuffer += formatSDI12Value(bme.humidity);
   
   // Append Gas Resistance (KOhms)
-  dataBuffer += "+";
-  dataBuffer += String(bme.gas_resistance / 1000.0, 2);
+  dataBuffer += formatSDI12Value(bme.gas_resistance / 1000.0);
   
   // Append Light Intensity (Lux)
-  dataBuffer += "+";
-  dataBuffer += String(lux, 2);
+  dataBuffer += formatSDI12Value(lux);
   
   Serial.println("Sensors Read Successfully. Buffer Updated.");
 }
