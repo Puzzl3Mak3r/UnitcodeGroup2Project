@@ -127,6 +127,7 @@ void commISR();
 void btnLogISR();
 void btnClearISR();
 void updateDataBuffer();
+void printSDCardContents();
 
 void setup() {
   Serial.begin(9600);
@@ -210,6 +211,10 @@ void setup() {
   }
 
   Serial.println("System Ready. Distinction Interrupt Architecture Active.");
+  
+  // Dump the file contents to verify previous logs were saved
+  printSDCardContents();
+}
 }
 
 void loop() {
@@ -581,6 +586,25 @@ void clearSDCard() {
     Serial.println("LOG.CSV cleared and reset.");
   } else {
     Serial.println("Error: Failed to clear LOG.CSV!");
+  }
+}
+
+// ==========================================================
+// DEBUG HELPER: Dump SD Card contents to Serial Monitor
+// ==========================================================
+void printSDCardContents() {
+  Serial.println("\n--- Reading LOG.CSV ---");
+  
+  // Open the file in read-only mode
+  if (logFile.open("LOG.CSV", O_READ)) {
+    // Read and print every character until the end of the file
+    while (logFile.available()) {
+      Serial.write(logFile.read());
+    }
+    logFile.close();
+    Serial.println("\n--- End of File ---\n");
+  } else {
+    Serial.println("Error: Could not open LOG.CSV for reading.");
   }
 }
 
