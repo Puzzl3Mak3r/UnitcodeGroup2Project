@@ -2,13 +2,13 @@
  * Unit: ENG20009 Engineering Technology Inquiry Project
  * Group 2 Members:
  * - Jaymond Martin (102579706)   [Task: Standalone Logic, RTC & Timestamps]
- * - Taha Mohamed Shaik (105910382) [Task: SD Card File Management]
- * - Chinmayee Sharma (105702631) [Task: LCD Dashboard & Pushbuttons]
+ * - Taha Mohamed Shaik (105910382) [Task: SD Card File Management, UART Polling]
+ * - Chinmayee Sharma (105702631) [Task: LCD Dashboard & Pushbuttons, Command Parser]
  * 
  * Description: Project Credit Task - The "Edge Data Hub"
  * Transforms the compliant sensor node into a standalone logger. 
  * Automatically logs data to an SD card every 60 seconds with an RTC timestamp.
- * Features an LCD dashboard and pushbutton configuration menu.
+ * Features a real-time LCD dashboard and pushbutton configuration menu.
  * 
  * Hardware Mapping (Swinburne Arduino Due Board):
  * - BME680 & BH1750 & DS1307 RTC -> I2C (SDA/SCL)
@@ -40,8 +40,8 @@ RTC_DS1307 rtc;
 #define TFT_MOSI  11   
 
 // Pushbutton Pins
-const int btnLogPin = 2;   // Manually trigger a log
-const int btnClearPin = 3; // Clear the SD card
+const int btnLogPin = 2;   
+const int btnClearPin = 3; 
 
 // SD Card Pins
 const uint8_t SD_CS_PIN = A3;
@@ -59,14 +59,17 @@ SdFs sd;
 FsFile logFile;
 
 // --- SDI-12 STATE VARIABLES ---
-#define DIRO_PIN 7 
+#define DIRO_PIN 8
 char address = '0';
 String command = "";
 String dataBuffer = "+0.00+0.00+0.00+0.00+0.00";
 
-// --- STANDALONE LOGGING VARIABLES ---
+// --- STANDALONE LOGGING & DISPLAY VARIABLES ---
 unsigned long lastLogTime = 0;
 const unsigned long logInterval = 60000; // 60 seconds in milliseconds
+
+unsigned long lastDisplayTime = 0;
+const unsigned long displayInterval = 3000; // 3 seconds (Allows BME680 gas heater to cool down)
 
 // --- BUTTON STATE VARIABLES ---
 int btnLogLastState = HIGH;
@@ -87,18 +90,23 @@ void checkPushbuttons();
 
 void setup() {
   Serial.begin(9600);
+  while (!Serial); // Wait for IDE Serial Monitor to connect before booting
   Serial.println("--- Edge Data Hub Booting ---");
+  Serial.println("Test1");
 
   // 1. Initialize SDI-12 UART
   Serial1.begin(1200, SERIAL_7E1);
   pinMode(DIRO_PIN, OUTPUT);
   digitalWrite(DIRO_PIN, HIGH);
 
-  // 2. Initialize Pushbuttons with internal pull-ups
+  // 2. Initialize Pushbuttons with internal pull-ups 
   pinMode(btnLogPin, INPUT_PULLUP);
   pinMode(btnClearPin, INPUT_PULLUP);
   
-  // 3. Initialize I2C Bus & Sensors
+  // 3. Initialize SD Card
+  initSDCard();
+  
+  // 4. Initialize I2C Bus & Sensors
   Wire.begin();
 
   if (!lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
@@ -114,7 +122,7 @@ void setup() {
     bme.setGasHeater(320, 150); 
   }
 
-  // 4. Initialize RTC (Jaymond's Task)
+  // 5. Initialize RTC (Jaymond's Task)
   if (!rtc.begin()) {
     Serial.println("Error: RTC not found on I2C bus!");
   }
@@ -123,23 +131,36 @@ void setup() {
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
 
-  // 5. Initialize Teammate Modules
-  initSDCard();
+  // 6. Initialize LCD
   initLCD();
+
+  // Force an initial reading and dashboard update so the screen isn't blank at boot
+  readSensors();
+  updateDashboard();
 
   Serial.println("System Ready. Standalone logging active.");
 }
 
 void loop() {
   // ==========================================================
-  // SDI-12 POLLING (Legacy Pass Task Logic)
+  // AUTHOR: Taha Mohamed Shaik (105910382)
+  // TASK: Check Serial monitor constantly (UART Polling)
   // ==========================================================
-  if (Serial1.available()) {
+  
+  // Use 'while' instead of 'if' to ensure the buffer is completely emptied,
+  // preventing dropped characters when the loop is slowed down by the LCD.
+  while (Serial1.available() > 0) {
     int incomingByte = Serial1.read();
+    
+    // SDI-12 commands ALWAYS terminate with an exclamation mark '!' (ASCII 33)
     if (incomingByte == 33) {
+      Serial.print("Received Command: ");
+      Serial.println(command + "!");
+      
       handleCommand(command + "!");
       command = ""; 
     } else {
+      // Ignore start bits (0) and append valid characters to the buffer
       if (incomingByte != 0 && incomingByte != '\r' && incomingByte != '\n') {
         command += char(incomingByte);
       }
@@ -150,6 +171,14 @@ void loop() {
   // AUTHOR: Jaymond Martin (102579706)
   // TASK: Standalone Timer Logic
   // ==========================================================
+  
+  // Non-blocking 3-second timer for real-time dashboard updates
+  if (millis() - lastDisplayTime >= displayInterval) {
+    lastDisplayTime = millis();
+    readSensors();     
+    updateDashboard(); 
+  }
+
   // Non-blocking 60-second timer for automatic logging
   if (millis() - lastLogTime >= logInterval) {
     lastLogTime = millis();
@@ -168,21 +197,23 @@ void loop() {
 // TASK: Core Logging & Timestamp Generation
 // ==========================================================
 void executeLogCycle() {
-  // 1. Update the sensor data buffer
+  // 1. Update the sensor data buffer to ensure the log is perfectly synced
   readSensors();
 
   // 2. Generate the timestamp
   String timestamp = getTimestamp();
 
-  // 3. Construct the CSV row (e.g., "2026-05-25 18:15:00, +25.34+1011.24...")
+  // 3. Construct the CSV row
   String logEntry = timestamp + ", " + dataBuffer;
 
   // Print to Serial for debugging
   Serial.print("Auto-Log Triggered: ");
   Serial.println(logEntry);
 
-  // 4. Pass the data to SD Card function and LCD function
+  // 4. Pass the data to SD Card function
   logToSDCard(logEntry);
+  
+  // 5. Force a dashboard update so the UI matches the exact logged value
   updateDashboard();
 }
 
@@ -190,7 +221,6 @@ String getTimestamp() {
   DateTime now = rtc.now();
   char timeBuffer[25];
   
-  // Format: YYYY-MM-DD HH:MM:SS
   sprintf(timeBuffer, "%04d-%02d-%02d %02d:%02d:%02d", 
           now.year(), now.month(), now.day(), 
           now.hour(), now.minute(), now.second());
@@ -199,7 +229,8 @@ String getTimestamp() {
 }
 
 // ==========================================================
-// LEGACY PASS TASK FUNCTIONS (Sensors & SDI-12)
+// AUTHOR: Jaymond Martin (102579706)
+// TASK: Pass - Read Sensors
 // ==========================================================
 void readSensors() {
   if (!bme.performReading()) return;
@@ -213,28 +244,50 @@ void readSensors() {
   dataBuffer += "+"; dataBuffer += String(lux, 2);
 }
 
+// ==========================================================
+// AUTHOR: Chinmayee Sharma (105702631)
+// TASK: Pass - Command handling look at table (SDI-12 Parser)
+// ==========================================================
 void handleCommand(String cmd) {
   cmd.trim();
+  
+  // 1. Address Query: ?!
   if (cmd == "?!") {
     sendSDI12Response(String(address));
-  } else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'A' && cmd[3] == '!') {
+  } 
+  // 2. Change Address: aAb!
+  else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'A' && cmd[3] == '!') {
     address = cmd[2]; 
     sendSDI12Response(String(address));
-  } else if (cmd == String(address) + "M!") {
-    readSensors();
+  } 
+  // 3. Start Measurement: aM!
+  else if (cmd == String(address) + "M!") {
+    // Respond instantly to prevent SDI-12 master timeout. 
+    // Data is already kept fresh by the 3-second display timer.
     sendSDI12Response(String(address) + "0035");
-  } else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'D' && cmd[3] == '!') {
-    if (cmd[2] == '0') sendSDI12Response(String(address) + dataBuffer);
-    else if (cmd[2] > '0' && cmd[2] <= '9') sendSDI12Response(String(address)); 
-  } else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'R' && cmd[3] == '!') {
+  } 
+  // 4. Send Data: aD0! to aD9!
+  else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'D' && cmd[3] == '!') {
     if (cmd[2] == '0') {
-      readSensors();
       sendSDI12Response(String(address) + dataBuffer);
-    } else if (cmd[2] > '0' && cmd[2] <= '9') sendSDI12Response(String(address)); 
+    } else if (cmd[2] > '0' && cmd[2] <= '9') {
+      sendSDI12Response(String(address)); 
+    }
+  } 
+  // 5. Continuous Measurement: aR0! to aR9!
+  else if (cmd.length() == 4 && cmd[0] == address && cmd[1] == 'R' && cmd[3] == '!') {
+    if (cmd[2] == '0') {
+      sendSDI12Response(String(address) + dataBuffer);
+    } else if (cmd[2] > '0' && cmd[2] <= '9') {
+      sendSDI12Response(String(address)); 
+    }
   }
 }
 
 void sendSDI12Response(String message) {
+  Serial.print("Sending Response: "); 
+  Serial.println(message);
+  
   digitalWrite(DIRO_PIN, LOW); 
   delay(100); 
   Serial1.print(message + "\r\n");
@@ -246,7 +299,7 @@ void sendSDI12Response(String message) {
 
 // ==========================================================
 // AUTHOR: Taha Mohamed Shaik (105910382)
-// TASK: SD Card File Management
+// TASK: Credit - SD Card File Management
 // ==========================================================
 void initSDCard() {
   pinMode(SD_CS_PIN, OUTPUT);
@@ -258,7 +311,6 @@ void initSDCard() {
   } else {
     Serial.println("SD Card initialized.");
     
-    // Create or append to the telemetry log file
     if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_APPEND)) {
       logFile.println("Timestamp, SDI-12_Buffer(+Temp+Pressure+Humidity+Gas+Lux)");
       logFile.close();
@@ -268,7 +320,6 @@ void initSDCard() {
 }
 
 void logToSDCard(String logEntry) {
-  // Open the CSV file, append the logEntry string, and close it
   if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_APPEND)) {
     logFile.println(logEntry);
     logFile.close();
@@ -278,8 +329,6 @@ void logToSDCard(String logEntry) {
 }
 
 void clearSDCard() {
-  // Overwrite the CSV file by opening with O_TRUNC to clear memory,
-  // then safely rewrite the header row.
   if (logFile.open("LOG.CSV", O_WRONLY | O_CREAT | O_TRUNC)) {
     logFile.println("Timestamp, SDI-12_Buffer(+Temp+Pressure+Humidity+Gas+Lux)");
     logFile.close();
@@ -291,14 +340,13 @@ void clearSDCard() {
 
 // ==========================================================
 // AUTHOR: Chinmayee Sharma (105702631)
-// TASK: LCD Dashboard & Pushbuttons
+// TASK: Credit - LCD Dashboard & Pushbuttons
 // ==========================================================
 void initLCD() {
   tft.initR(INITR_BLACKTAB);
-  tft.setRotation(3);           // Rotate to landscape orientation (160x128 pixels)
-  tft.fillScreen(ST77XX_BLACK); // Clear display memory
+  tft.setRotation(3);           
+  tft.fillScreen(ST77XX_BLACK); 
 
-  // Static UI labels
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
   tft.setCursor(5, 10);
@@ -318,31 +366,32 @@ void initLCD() {
 }
 
 void updateDashboard() {
-  // Clear only the data area to prevent screen flickering
-  tft.fillRect(65, 25, 95, 80, ST77XX_BLACK); 
-
   tft.setTextSize(1);
-  tft.setTextColor(ST77XX_GREEN);
+  
+  // Using the background color parameter (ST77XX_BLACK) forces the text 
+  // to overwrite the old pixels, eliminating the need for a slow fillRect()
+  tft.setTextColor(ST77XX_GREEN, ST77XX_BLACK);
 
+  // Padding with spaces at the end ensures that if the new number is shorter 
+  // than the old number, the leftover trailing characters are erased.
   tft.setCursor(65, 30);
   tft.print(bme.temperature);
-  tft.print(" C");
+  tft.print(" C   ");
 
   tft.setCursor(65, 50);
   tft.print(bme.humidity);
-  tft.print(" %");
+  tft.print(" %   ");
 
   tft.setCursor(65, 70);
   tft.print(bme.pressure / 100.0);
-  tft.print(" hPa");
+  tft.print(" hPa   ");
   
   tft.setCursor(65, 90);
   tft.print(lightMeter.readLightLevel());
-  tft.print(" Lux");
+  tft.print(" Lux   ");
 }
 
 void checkPushbuttons() {
-  // Read the current physical state of the buttons
   int btnLogState = digitalRead(btnLogPin);
   int btnClearState = digitalRead(btnClearPin);
 
