@@ -214,6 +214,7 @@ void setup() {
   }
 
   Serial.println("System Ready. Fail-Safe WDT Active.");
+  void printSDCardContents();
 }
 
 void loop() {
