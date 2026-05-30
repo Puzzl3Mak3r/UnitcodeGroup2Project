@@ -141,7 +141,7 @@ void setup() {
   Serial.begin(9600);
   while (!Serial); 
   Serial.println("--- Advanced Event-Driven Node Booting ---");
-  Serial.println("Test1");
+  Serial.println("Test4");
 
   // ==========================================================
   // AUTHOR: Jaymond Martin (102579706)
@@ -223,7 +223,7 @@ void loop() {
   // ==========================================================
   // Restart the WDT to prevent a hardware reset. If the loop freezes 
   // (e.g., stuck in an infinite I2C while-loop), the board will reboot.
-  WDT->WDT_CR = WDT_CR_KEY(WDT_KEY) | WDT_CR_WDRSTT;
+  WDT->WDT_CR = WDT_CR_KEY(WDT_KEY) | WDT_CR_WDRSTT; // Comment this out to test wdt
 
   // ==========================================================
   // ASYNCHRONOUS BME680 DATA COLLECTION
@@ -470,6 +470,9 @@ void processIncomingUART() {
 // ==========================================================
 void executeLogCycle() {
   updateDataBuffer();
+
+  //Serial.println("[TEST] Simulating a severe I2C lockup now. Board should freeze...");
+  //delay(5000); // 5-second freeze. The WDT times out at 4 seconds!
 
   String timestamp = getTimestamp();
   String logEntry = timestamp + ", " + dataBuffer;
